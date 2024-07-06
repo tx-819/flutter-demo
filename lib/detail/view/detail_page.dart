@@ -1,13 +1,13 @@
 import 'dart:io';
-import 'dart:typed_data';
-import 'dart:ui';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:image_gallery_saver/image_gallery_saver.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:my_app/detail/cubit/detail_cubit.dart';
 import 'package:my_app/l10n/l10n.dart';
-import 'package:path_provider/path_provider.dart';
 
 class DetailPage extends StatelessWidget {
   const DetailPage({super.key});
@@ -38,7 +38,7 @@ class _DetailViewState extends State<DetailView> {
 
   Future<void> _pickImage() async {
     final picker = ImagePicker();
-    final pickedFile = await picker.pickImage(source: ImageSource.camera);
+    final pickedFile = await picker.pickImage(source: ImageSource.gallery);
     if (pickedFile != null) {
       setState(() {
         _image = File(pickedFile.path);
@@ -73,7 +73,7 @@ class _DetailViewState extends State<DetailView> {
       ));
     }
 
-    showModalBottomSheet(
+    showModalBottomSheet<void>(
       context: context,
       builder: (BuildContext context) {
         return Container(
@@ -108,18 +108,37 @@ class _DetailViewState extends State<DetailView> {
   Future<void> _saveImage() async {
     try {
       final boundary = _globalKey.currentContext!.findRenderObject()!
-          as RenderRepaintBoundary;
-      final image = await boundary.toImage();
-      final byteData = await image.toByteData(format: ImageByteFormat.png);
+      as RenderRepaintBoundary;
+      final image = await boundary.toImage(pixelRatio: 3);
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
       final pngBytes = byteData!.buffer.asUint8List();
-      final directory = (await getApplicationDocumentsDirectory()).path;
-      final imgFile = File('$directory/snapshot.png');
-      await imgFile.writeAsBytes(pngBytes);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Image saved to $directory/snapshot.png'),
-      ));
+
+      // 使用 image_gallery_saver 保存图片到相册
+      final result = await ImageGallerySaver.saveImage(
+        Uint8List.fromList(pngBytes),
+        quality: 100,
+        name: 'snapshot',
+      );
+
+      if ((result['isSuccess']) as bool) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Image saved to gallery!'),
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to save image: ${result['errorMessage']}'),
+          ),
+        );
+      }
     } catch (e) {
-      print(e);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to save image: $e'),
+        ),
+      );
     }
   }
 
@@ -155,8 +174,13 @@ class _DetailViewState extends State<DetailView> {
                         feedback: Image.asset(pickedEmoji!, width: 50),
                         childWhenDragging: Container(),
                         onDragEnd: (dragDetails) {
+                          final renderBox = _globalKey.currentContext!
+                              .findRenderObject()! as RenderBox;
+                          final localPosition = renderBox.globalToLocal(
+                            dragDetails.offset,
+                          );
                           setState(() {
-                            _emojiPosition = dragDetails.offset;
+                            _emojiPosition = localPosition;
                           });
                         },
                         child: Image.asset(pickedEmoji!, width: 50),
@@ -181,6 +205,8 @@ class _DetailViewState extends State<DetailView> {
                             setState(() {
                               showAppOptions = false;
                               _image = null;
+                              pickedEmoji = null;
+                              _emojiPosition = const Offset(50, 50);
                             });
                           },
                         ),
